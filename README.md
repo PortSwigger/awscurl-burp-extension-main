@@ -1,4 +1,4 @@
-# AWSCurlBurpExtension
+# AWSCurl/Curl With SigV4 BurpExtension
 Burp Extension to create AWS Curl commands or cURL with SigV4 from an API
 
 Simple right-click functionality to bring up the extension contenxt menu and select the extension. The awscurl command or curl with sigv4 will be copied to clipboard.
