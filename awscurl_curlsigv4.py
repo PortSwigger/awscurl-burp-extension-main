@@ -34,7 +34,7 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
     def registerExtenderCallbacks(self, callbacks):
         self._callbacks = callbacks
         self._helpers = callbacks.getHelpers()
-        callbacks.setExtensionName("Combined AWS Curl Commands")
+        callbacks.setExtensionName("AWS Curl Commands")
         callbacks.registerContextMenuFactory(self)
         self._stdout = callbacks.getStdout()
         # Attempt to register the unload handler if supported.
@@ -42,16 +42,16 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
             callbacks.registerExtensionUnloadingHandler(UnloadHandler(self._stdout))
         except AttributeError:
             self._stdout.write("Warning: registerExtensionUnloadingHandler not supported in this version of Burp.\n")
-        self._stdout.write("Loaded: Combined AWS Curl Commands\n")
+        self._stdout.write("Loaded: AWS Curl Commands\n")
         return
 
     def createMenuItems(self, invocation):
         menu_items = ArrayList()
         # Menu item for awscurl command using a lambda.
-        menu_items.add(JMenuItem("Create awscurl Command",
+        menu_items.add(JMenuItem("Copy as awscURL Command",
                                   actionPerformed=lambda x: self.generate_awscurl_command(invocation)))
         # Menu item for AWS SigV4 curl command using a dedicated ActionListener.
-        menu_item_sigv4 = JMenuItem("Copy as curl with AWS SigV4")
+        menu_item_sigv4 = JMenuItem("Copy as cURL Command with AWS SigV4")
         menu_item_sigv4.addActionListener(CurlActionListener(self, invocation))
         menu_items.add(menu_item_sigv4)
         return menu_items
