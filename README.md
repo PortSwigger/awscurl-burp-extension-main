@@ -15,6 +15,7 @@ awscurl --service <service> --region us-east-1 \
     -H 'User-Agent: <User-Agent>' \
     -H 'X-Amz-Date: <date>' \
     -H 'X-Amz-Security-Token: <Token>' \
+    -d '{<data>}' \
     '<Endpoint-URL>'
 ```
 
