@@ -1,4 +1,4 @@
-from burp import IBurpExtender, IContextMenuFactory, IHttpRequestResponse
+from burp import IBurpExtender, IContextMenuFactory, IExtensionUnloadingHandler
 from javax.swing import JMenuItem, JOptionPane
 from java.util import ArrayList
 from java.awt.event import ActionListener
@@ -8,26 +8,40 @@ import json
 import xml.etree.ElementTree as ET
 import re
 
-class BurpExtender(IBurpExtender, IContextMenuFactory):
+# --- Montoya API Dependency Reference ---
+# This extension references the Montoya API artifact.
+# Gradle dependency:
+# implementation 'burp:montoya-api:1.0.0'
+#
+# Maven dependency:
+# <dependency>
+#   <groupId>burp</groupId>
+#   <artifactId>montoya-api</artifactId>
+#   <version>1.0.0</version>
+# </dependency>
+
+# For proper GUI parenting, we import SwingUtils to retrieve the Burp Suite main frame.
+from burp import SwingUtils
+
+class BurpExtender(IBurpExtender, IContextMenuFactory, IExtensionUnloadingHandler):
 
     def registerExtenderCallbacks(self, callbacks):
         self._callbacks = callbacks
         self._helpers = callbacks.getHelpers()
-        # Set a combined extension name
-        callbacks.setExtensionName("AWS Curl Commands")
+        callbacks.setExtensionName("Combined AWS Curl Commands")
         callbacks.registerContextMenuFactory(self)
-        # For logging purposes (used in the SigV4 functionality)
+        callbacks.registerUnloadingHandler(self)  # Register the unloading handler
         self._stdout = callbacks.getStdout()
-        self._stdout.write("Loaded: AWS Curl Commands\n")
+        self._stdout.write("Loaded: Combined AWS Curl Commands\n")
         return
 
     def createMenuItems(self, invocation):
         menu_items = ArrayList()
-        # Add menu item for awscurl command
-        menu_items.add(JMenuItem("Copy as AWSCurl", 
+        # Menu item for awscurl command using a lambda
+        menu_items.add(JMenuItem("Create awscurl Command", 
                                   actionPerformed=lambda x: self.generate_awscurl_command(invocation)))
-        # Add menu item for AWS SigV4 curl command
-        menu_item_sigv4 = JMenuItem("Copy as cURL with AWS SigV4")
+        # Menu item for AWS SigV4 curl command using a dedicated ActionListener
+        menu_item_sigv4 = JMenuItem("Copy as curl with AWS SigV4")
         menu_item_sigv4.addActionListener(CurlActionListener(self, invocation))
         menu_items.add(menu_item_sigv4)
         return menu_items
@@ -46,8 +60,6 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
 
                 aws_service, aws_region = self.extract_aws_info(headers)
                 content_type = self.get_content_type(headers)
-
-                # Process body based on content type (JSON, XML, GraphQL, or raw)
                 processed_body = self.process_body(body, content_type)
 
                 awscurl_command = ["awscurl --service {} --region {}".format(aws_service, aws_region)]
@@ -62,7 +74,6 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
                     awscurl_command.append("-d '{}'".format(escaped_body))
 
                 awscurl_command.append("'{}'".format(url))
-
                 final_command = " \\\n".join(awscurl_command)
 
                 clipboard = Toolkit.getDefaultToolkit().getSystemClipboard()
@@ -82,7 +93,7 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
                     if part.startswith("Credential="):
                         credential_parts = part.split('/')
                         if len(credential_parts) >= 5:
-                            return credential_parts[3], credential_parts[2]  # Service and Region
+                            return credential_parts[3], credential_parts[2]
         return "unknown", "unknown"
 
     def get_content_type(self, headers):
@@ -107,6 +118,11 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
             self._callbacks.printError("Error processing body: " + str(e))
             return body.strip()
 
+    # Unloading handler method to clean up when the extension is unloaded.
+    def extensionUnloaded(self):
+        self._stdout.write("Unloading Combined AWS Curl Commands extension.\n")
+
+
 class CurlActionListener(ActionListener):
     def __init__(self, extender, invocation):
         self._extender = extender
@@ -123,11 +139,8 @@ class CurlActionListener(ActionListener):
         httpService = messageInfo.getHttpService()
         analyzedRequest = self._extender._helpers.analyzeRequest(httpService, request)
         headers = analyzedRequest.getHeaders()
-
-        # 1. URL as captured
         url = analyzedRequest.getUrl().toString()
 
-        # 2. Determine region and service from the host
         host = httpService.getHost()
         region = "us-east-1"
         service = ""
@@ -144,22 +157,18 @@ class CurlActionListener(ActionListener):
             else:
                 service = "execute-api"
 
-        # 3. Build the curl command lines
         lines = []
         lines.append('curl "' + url + '"')
         lines.append('    --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY"')
         lines.append('    -H "x-amz-security-token: $AWS_SESSION_TOKEN"')
         lines.append('    --aws-sigv4 "aws:amz:' + region + ':' + service + '"')
 
-        # Append remaining headers (skip host, authorization, x-amz-date, and x-amz-security-token)
         for header in headers[1:]:
             lower = header.lower()
-            if (lower.startswith("host:") or lower.startswith("authorization:") or 
-                lower.startswith("x-amz-date:") or lower.startswith("x-amz-security-token:")):
+            if lower.startswith("host:") or lower.startswith("authorization:") or lower.startswith("x-amz-date:") or lower.startswith("x-amz-security-token:"):
                 continue
             lines.append("    -H '" + header + "'")
 
-        # 4. Append request body if present
         body_offset = analyzedRequest.getBodyOffset()
         request_bytes = request
         if len(request_bytes) > body_offset:
@@ -168,7 +177,6 @@ class CurlActionListener(ActionListener):
                 body = body.replace("'", "'\\''")
                 lines.append("    --data '" + body + "'")
 
-        # Format command with backslashes on every line except the last
         final_lines = []
         for i, line in enumerate(lines):
             if i < len(lines) - 1:
@@ -186,7 +194,8 @@ class CurlActionListener(ActionListener):
             self._log("Curl command copied to clipboard.")
         except Exception as e:
             self._log("Error copying to clipboard: " + str(e))
-            JOptionPane.showMessageDialog(None, text, "Curl Command", JOptionPane.INFORMATION_MESSAGE)
+            parent = SwingUtils.suiteFrame()  # Use the Burp Suite main frame as the parent
+            JOptionPane.showMessageDialog(parent, text, "Curl Command", JOptionPane.INFORMATION_MESSAGE)
 
     def _log(self, message):
         try:
