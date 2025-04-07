@@ -1,4 +1,4 @@
-from burp import IBurpExtender, IContextMenuFactory, IExtensionUnloadingHandler
+from burp import IBurpExtender, IContextMenuFactory
 from javax.swing import JMenuItem, JOptionPane
 from java.util import ArrayList
 from java.awt.event import ActionListener
@@ -11,36 +11,46 @@ import re
 # --- Montoya API Dependency Reference ---
 # This extension references the Montoya API artifact.
 # Gradle dependency:
-# implementation 'burp:montoya-api:1.0.0'
+#     implementation 'burp:montoya-api:1.0.0'
 #
 # Maven dependency:
-# <dependency>
-#   <groupId>burp</groupId>
-#   <artifactId>montoya-api</artifactId>
-#   <version>1.0.0</version>
-# </dependency>
+#     <dependency>
+#       <groupId>burp</groupId>
+#       <artifactId>montoya-api</artifactId>
+#       <version>1.0.0</version>
+#     </dependency>
 
-# For proper GUI parenting, we import SwingUtils to retrieve the Burp Suite main frame.
-from burp import SwingUtils
+# Helper function to get the main Burp Suite frame.
+def getBurpFrame():
+    from javax.swing import JFrame
+    frames = JFrame.getFrames()
+    for frame in frames:
+        if "Burp Suite" in frame.getTitle():
+            return frame
+    return None
 
-class BurpExtender(IBurpExtender, IContextMenuFactory, IExtensionUnloadingHandler):
+class BurpExtender(IBurpExtender, IContextMenuFactory):
 
     def registerExtenderCallbacks(self, callbacks):
         self._callbacks = callbacks
         self._helpers = callbacks.getHelpers()
-        callbacks.setExtensionName("AWS Curl Commands")
+        callbacks.setExtensionName("Combined AWS Curl Commands")
         callbacks.registerContextMenuFactory(self)
-        callbacks.registerUnloadingHandler(self)  # Register the unloading handler
         self._stdout = callbacks.getStdout()
-        self._stdout.write("Loaded: AWS Curl Commands\n")
+        # Attempt to register the unload handler if supported.
+        try:
+            callbacks.registerExtensionUnloadingHandler(UnloadHandler(self._stdout))
+        except AttributeError:
+            self._stdout.write("Warning: registerExtensionUnloadingHandler not supported in this version of Burp.\n")
+        self._stdout.write("Loaded: Combined AWS Curl Commands\n")
         return
 
     def createMenuItems(self, invocation):
         menu_items = ArrayList()
-        # Menu item for awscurl command using a lambda
-        menu_items.add(JMenuItem("Copy as awscurl", 
+        # Menu item for awscurl command using a lambda.
+        menu_items.add(JMenuItem("Create awscurl Command",
                                   actionPerformed=lambda x: self.generate_awscurl_command(invocation)))
-        # Menu item for AWS SigV4 curl command using a dedicated ActionListener
+        # Menu item for AWS SigV4 curl command using a dedicated ActionListener.
         menu_item_sigv4 = JMenuItem("Copy as curl with AWS SigV4")
         menu_item_sigv4.addActionListener(CurlActionListener(self, invocation))
         menu_items.add(menu_item_sigv4)
@@ -118,10 +128,13 @@ class BurpExtender(IBurpExtender, IContextMenuFactory, IExtensionUnloadingHandle
             self._callbacks.printError("Error processing body: " + str(e))
             return body.strip()
 
-    # Unloading handler method to clean up when the extension is unloaded.
+# A simple unload handler class.
+class UnloadHandler(object):
+    def __init__(self, stdout):
+        self._stdout = stdout
+
     def extensionUnloaded(self):
         self._stdout.write("Unloading Combined AWS Curl Commands extension.\n")
-
 
 class CurlActionListener(ActionListener):
     def __init__(self, extender, invocation):
@@ -194,7 +207,7 @@ class CurlActionListener(ActionListener):
             self._log("Curl command copied to clipboard.")
         except Exception as e:
             self._log("Error copying to clipboard: " + str(e))
-            parent = SwingUtils.suiteFrame()  # Use the Burp Suite main frame as the parent
+            parent = getBurpFrame()  # Use our helper function for proper GUI parenting.
             JOptionPane.showMessageDialog(parent, text, "Curl Command", JOptionPane.INFORMATION_MESSAGE)
 
     def _log(self, message):
