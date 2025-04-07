@@ -9,13 +9,13 @@ Simple right-click functionality to bring up the extension contenxt menu and sel
 AWS cURL
 ```
 awscurl --service <service> --region us-east-1 \
--X GET \
--H 'Host: <host>' \
--H 'Accept-Encoding: gzip, deflate, br' \
--H 'User-Agent: <User-Agent>' \
--H 'X-Amz-Date: <date>' \
--H 'X-Amz-Security-Token: <Token>' \
-'<Endpoint-URL>'
+    -X GET \
+    -H 'Host: <host>' \
+    -H 'Accept-Encoding: gzip, deflate, br' \
+    -H 'User-Agent: <User-Agent>' \
+    -H 'X-Amz-Date: <date>' \
+    -H 'X-Amz-Security-Token: <Token>' \
+    '<Endpoint-URL>'
 ```
 
 cURL with SigV4
