@@ -38,24 +38,34 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
             return None
 
         menu_items = ArrayList()
+
         awscurl_item = JMenuItem("Copy as awscURL Command")
-        awscurl_item.addActionListener(AwscurlActionListener(self, invocation))
+        awscurl_item.addActionListener(AwscurlActionListener(self, msg))
         menu_items.add(awscurl_item)
 
         sigv4_item = JMenuItem("Copy as cURL Command with AWS SigV4")
-        sigv4_item.addActionListener(CurlActionListener(self, invocation))
+        sigv4_item.addActionListener(CurlActionListener(self, msg))
         menu_items.add(sigv4_item)
 
         return menu_items
 
-    def generate_awscurl_command(self, invocation):
+
+class AwscurlActionListener(ActionListener):
+    def __init__(self, extender, msg):
+        self._helpers   = extender._helpers
+        self._callbacks = extender._callbacks
+        self._stdout    = extender._stdout
+        self._msg       = msg
+
+    def actionPerformed(self, event):
         try:
-            rr   = invocation.getSelectedMessages()[0]
-            info = self._helpers.analyzeRequest(rr)
+            info    = self._helpers.analyzeRequest(self._msg)
             method  = info.getMethod()
             url     = str(info.getUrl())
             headers = info.getHeaders()
-            body    = self._helpers.bytesToString(rr.getRequest()[info.getBodyOffset():])
+            body    = self._helpers.bytesToString(
+                          self._msg.getRequest()[info.getBodyOffset():]
+                      )
 
             svc, region = self._extract_aws_info(headers)
             ctype       = self._get_content_type(headers)
@@ -70,8 +80,8 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
                     parts.append("-H '{}'".format(h))
 
             if payload:
-                escaped = payload.replace("'", "'\\''")
-                parts.append("-d '{}'".format(escaped))
+                esc = payload.replace("'", "'\\''")
+                parts.append("-d '{}'".format(esc))
 
             parts.append("'{}'".format(url))
             cmd = " \\\n".join(parts)
@@ -111,65 +121,59 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
         except:
             return body.strip()
 
-class AwscurlActionListener(ActionListener):
-    def __init__(self, extender, invocation):
-        self._ext = extender
-        self._inv = invocation
-
-    def actionPerformed(self, event):
-        self._ext.generate_awscurl_command(self._inv)
 
 class CurlActionListener(ActionListener):
-    def __init__(self, extender, invocation):
-        self._ext = extender
-        self._inv = invocation
+    def __init__(self, extender, msg):
+        self._helpers = extender._helpers
+        self._stdout  = extender._stdout
+        self._msg     = msg
 
     def actionPerformed(self, event):
-        msg = self._inv.getSelectedMessages()[0]
-        req = msg.getRequest()
-        svc = msg.getHttpService()
-        info = self._ext._helpers.analyzeRequest(svc, req)
-        headers = info.getHeaders()
-        url = info.getUrl().toString()
-
-        host = svc.getHost()
-        region = "us-east-1"
-        service = ""
-        if "execute-api" in host:
-            service = "execute-api"
-            m = re.search(r"\.execute-api\.([^.]+)\.amazonaws\.com", host)
-            if m: region = m.group(1)
-        else:
-            m2 = re.match(r"^([^-\.]+)(?:-[^\.]+)?\.([^.]+)\.amazonaws\.com$", host)
-            if m2:
-                service, region = m2.group(1), m2.group(2)
-            else:
-                service = "execute-api"
-
-        lines = [
-            'curl "{}"'.format(url),
-            '    --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY"',
-            '    -H "x-amz-security-token: $AWS_SESSION_TOKEN"',
-            '    --aws-sigv4 "aws:amz:{}:{}"'.format(region, service)
-        ]
-        for h in headers[1:]:
-            low = h.lower()
-            if low.startswith(("host:", "authorization:", "x-amz-date:", "x-amz-security-token:")):
-                continue
-            lines.append("    -H '{}'".format(h))
-
-        body_offset = info.getBodyOffset()
-        req_bytes = req
-        if len(req_bytes) > body_offset:
-            b = self._ext._helpers.bytesToString(req_bytes[body_offset:])
-            if b:
-                lines.append("    --data '{}'".format(b.replace("'", "'\\''")))
-
-        cmd = "\n".join(l + " \\" for l in lines[:-1]) + "\n" + lines[-1]
         try:
+            svc     = self._msg.getHttpService()
+            req     = self._msg.getRequest()
+            info    = self._helpers.analyzeRequest(svc, req)
+            headers = info.getHeaders()
+            url     = info.getUrl().toString()
+
+            host    = svc.getHost()
+            region  = "us-east-1"
+            service = ""
+            if "execute-api" in host:
+                service = "execute-api"
+                m = re.search(r"\.execute-api\.([^.]+)\.amazonaws\.com", host)
+                if m: region = m.group(1)
+            else:
+                m2 = re.match(r"^([^-\.]+)(?:-[^\.]+)?\.([^.]+)\.amazonaws\.com$", host)
+                if m2:
+                    service, region = m2.group(1), m2.group(2)
+                else:
+                    service = "execute-api"
+
+            lines = [
+                'curl "{}"'.format(url),
+                '    --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY"',
+                '    -H "x-amz-security-token: $AWS_SESSION_TOKEN"',
+                '    --aws-sigv4 "aws:amz:{}:{}"'.format(region, service)
+            ]
+            for h in headers[1:]:
+                low = h.lower()
+                if low.startswith(("host:", "authorization:", "x-amz-date:", "x-amz-security-token:")):
+                    continue
+                lines.append("    -H '{}'".format(h))
+
+            body_offset = info.getBodyOffset()
+            req_bytes   = req
+            if len(req_bytes) > body_offset:
+                b = self._helpers.bytesToString(req_bytes[body_offset:])
+                if b:
+                    lines.append("    --data '{}'".format(b.replace("'", "'\\''")))
+
+            cmd = "\n".join(l + " \\" for l in lines[:-1]) + "\n" + lines[-1]
             Toolkit.getDefaultToolkit().getSystemClipboard()\
                    .setContents(StringSelection(cmd), None)
-            self._ext._stdout.write("SigV4 curl command copied\n")
+            self._stdout.write("SigV4 curl command copied\n")
+
         except Exception:
             parent = getBurpFrame()
             JOptionPane.showMessageDialog(parent, cmd, "Curl Command", JOptionPane.INFORMATION_MESSAGE)
