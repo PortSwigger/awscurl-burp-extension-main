@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from burp import IBurpExtender, IContextMenuFactory
 from javax.swing import JMenuItem, JOptionPane
 from java.util import ArrayList
@@ -8,23 +9,9 @@ import json
 import xml.etree.ElementTree as ET
 import re
 
-# --- Montoya API Dependency Reference ---
-# This extension references the Montoya API artifact.
-# Gradle dependency:
-#     implementation 'burp:montoya-api:1.0.0'
-#
-# Maven dependency:
-#     <dependency>
-#       <groupId>burp</groupId>
-#       <artifactId>montoya-api</artifactId>
-#       <version>1.0.0</version>
-#     </dependency>
-
-# Helper function to get the main Burp Suite frame.
 def getBurpFrame():
     from javax.swing import JFrame
-    frames = JFrame.getFrames()
-    for frame in frames:
+    for frame in JFrame.getFrames():
         if "Burp Suite" in frame.getTitle():
             return frame
     return None
@@ -33,185 +20,156 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
 
     def registerExtenderCallbacks(self, callbacks):
         self._callbacks = callbacks
-        self._helpers = callbacks.getHelpers()
+        self._helpers   = callbacks.getHelpers()
         callbacks.setExtensionName("AWS Curl Commands")
         callbacks.registerContextMenuFactory(self)
         self._stdout = callbacks.getStdout()
-        # Attempt to register the unload handler if supported.
-        try:
-            callbacks.registerExtensionUnloadingHandler(UnloadHandler(self._stdout))
-        except AttributeError:
-            self._stdout.write("Warning: registerExtensionUnloadingHandler not supported in this version of Burp.\n")
         self._stdout.write("Loaded: AWS Curl Commands\n")
-        return
 
     def createMenuItems(self, invocation):
+        messages = invocation.getSelectedMessages()
+        if not messages or len(messages) != 1:
+            return None
+
+        msg = messages[0]
+        svc = msg.getHttpService()
+        req = msg.getRequest()
+        if svc is None or req is None or len(req) == 0:
+            return None
+
         menu_items = ArrayList()
-        # Menu item for awscurl command using a lambda.
-        menu_items.add(JMenuItem("Copy as awscURL Command",
-                                  actionPerformed=lambda x: self.generate_awscurl_command(invocation)))
-        # Menu item for AWS SigV4 curl command using a dedicated ActionListener.
-        menu_item_sigv4 = JMenuItem("Copy as cURL Command with AWS SigV4")
-        menu_item_sigv4.addActionListener(CurlActionListener(self, invocation))
-        menu_items.add(menu_item_sigv4)
+        awscurl_item = JMenuItem("Copy as awscURL Command")
+        awscurl_item.addActionListener(AwscurlActionListener(self, invocation))
+        menu_items.add(awscurl_item)
+
+        sigv4_item = JMenuItem("Copy as cURL Command with AWS SigV4")
+        sigv4_item.addActionListener(CurlActionListener(self, invocation))
+        menu_items.add(sigv4_item)
+
         return menu_items
 
     def generate_awscurl_command(self, invocation):
         try:
-            selected_messages = invocation.getSelectedMessages()
-            if selected_messages and len(selected_messages) > 0:
-                request_response = selected_messages[0]
-                request_info = self._helpers.analyzeRequest(request_response)
+            rr   = invocation.getSelectedMessages()[0]
+            info = self._helpers.analyzeRequest(rr)
+            method  = info.getMethod()
+            url     = str(info.getUrl())
+            headers = info.getHeaders()
+            body    = self._helpers.bytesToString(rr.getRequest()[info.getBodyOffset():])
 
-                method = request_info.getMethod()
-                url = str(request_info.getUrl())
-                headers = request_info.getHeaders()
-                body = self._helpers.bytesToString(request_response.getRequest()[request_info.getBodyOffset():])
+            svc, region = self._extract_aws_info(headers)
+            ctype       = self._get_content_type(headers)
+            payload     = self._process_body(body, ctype)
 
-                aws_service, aws_region = self.extract_aws_info(headers)
-                content_type = self.get_content_type(headers)
-                processed_body = self.process_body(body, content_type)
+            parts = [
+                "awscurl --service {} --region {}".format(svc, region),
+                "-X {}".format(method)
+            ]
+            for h in headers[1:]:
+                if not h.lower().startswith("authorization"):
+                    parts.append("-H '{}'".format(h))
 
-                awscurl_command = ["awscurl --service {} --region {}".format(aws_service, aws_region)]
-                awscurl_command.append("-X {}".format(method))
+            if payload:
+                escaped = payload.replace("'", "'\\''")
+                parts.append("-d '{}'".format(escaped))
 
-                for header in headers[1:]:
-                    if not header.lower().startswith("authorization"):
-                        awscurl_command.append("-H '{}'".format(header))
+            parts.append("'{}'".format(url))
+            cmd = " \\\n".join(parts)
 
-                if processed_body:
-                    escaped_body = processed_body.replace("'", "'\\''")
-                    awscurl_command.append("-d '{}'".format(escaped_body))
+            Toolkit.getDefaultToolkit().getSystemClipboard()\
+                   .setContents(StringSelection(cmd), None)
+            self._callbacks.printOutput("awscurl command copied:\n" + cmd)
 
-                awscurl_command.append("'{}'".format(url))
-                final_command = " \\\n".join(awscurl_command)
-
-                clipboard = Toolkit.getDefaultToolkit().getSystemClipboard()
-                clipboard.setContents(StringSelection(final_command), None)
-
-                self._callbacks.printOutput("awscurl command copied to clipboard:\n" + final_command)
-            else:
-                self._callbacks.printError("No request selected")
         except Exception as e:
-            self._callbacks.printError("Error generating awscurl command: " + str(e))
+            self._callbacks.printError("Error generating awscurl: " + str(e))
 
-    def extract_aws_info(self, headers):
-        for header in headers:
-            if header.lower().startswith("authorization:"):
-                auth_parts = header.split()
-                for part in auth_parts:
+    def _extract_aws_info(self, headers):
+        for h in headers:
+            if h.lower().startswith("authorization:"):
+                for part in h.split():
                     if part.startswith("Credential="):
-                        credential_parts = part.split('/')
-                        if len(credential_parts) >= 5:
-                            return credential_parts[3], credential_parts[2]
+                        segs = part.split('/')
+                        if len(segs) >= 5:
+                            return segs[3], segs[2]
         return "unknown", "unknown"
 
-    def get_content_type(self, headers):
-        for header in headers:
-            if header.lower().startswith("content-type:"):
-                return header.split(":", 1)[1].strip().lower()
-        return "unknown"
+    def _get_content_type(self, headers):
+        for h in headers:
+            if h.lower().startswith("content-type:"):
+                return h.split(":",1)[1].strip().lower()
+        return ""
 
-    def process_body(self, body, content_type):
+    def _process_body(self, body, ctype):
         try:
-            if "application/json" in content_type:
-                json_obj = json.loads(body)
-                return json.dumps(json_obj, indent=4)
-            elif "application/xml" in content_type or "text/xml" in content_type:
+            if "application/json" in ctype:
+                obj = json.loads(body)
+                return json.dumps(obj, indent=4)
+            if "xml" in ctype:
                 root = ET.fromstring(body)
                 return ET.tostring(root, encoding="unicode", method="xml")
-            elif "application/graphql" in content_type or "graphql" in content_type:
-                return body.strip()
-            else:
-                return body.strip()
-        except Exception as e:
-            self._callbacks.printError("Error processing body: " + str(e))
+            return body.strip()
+        except:
             return body.strip()
 
-# A simple unload handler class.
-class UnloadHandler(object):
-    def __init__(self, stdout):
-        self._stdout = stdout
+class AwscurlActionListener(ActionListener):
+    def __init__(self, extender, invocation):
+        self._ext = extender
+        self._inv = invocation
 
-    def extensionUnloaded(self):
-        self._stdout.write("Unloading Combined AWS Curl Commands extension.\n")
+    def actionPerformed(self, event):
+        self._ext.generate_awscurl_command(self._inv)
 
 class CurlActionListener(ActionListener):
     def __init__(self, extender, invocation):
-        self._extender = extender
-        self._invocation = invocation
+        self._ext = extender
+        self._inv = invocation
 
     def actionPerformed(self, event):
-        messages = self._invocation.getSelectedMessages()
-        if not messages or len(messages) == 0:
-            self._log("No message selected.")
-            return
+        msg = self._inv.getSelectedMessages()[0]
+        req = msg.getRequest()
+        svc = msg.getHttpService()
+        info = self._ext._helpers.analyzeRequest(svc, req)
+        headers = info.getHeaders()
+        url = info.getUrl().toString()
 
-        messageInfo = messages[0]
-        request = messageInfo.getRequest()
-        httpService = messageInfo.getHttpService()
-        analyzedRequest = self._extender._helpers.analyzeRequest(httpService, request)
-        headers = analyzedRequest.getHeaders()
-        url = analyzedRequest.getUrl().toString()
-
-        host = httpService.getHost()
+        host = svc.getHost()
         region = "us-east-1"
         service = ""
         if "execute-api" in host:
             service = "execute-api"
             m = re.search(r"\.execute-api\.([^.]+)\.amazonaws\.com", host)
-            if m:
-                region = m.group(1)
+            if m: region = m.group(1)
         else:
-            m = re.search(r"^([^-\.]+)(?:-[^\.]+)?\.([^.]+)\.amazonaws\.com$", host)
-            if m:
-                service = m.group(1)
-                region = m.group(2)
+            m2 = re.match(r"^([^-\.]+)(?:-[^\.]+)?\.([^.]+)\.amazonaws\.com$", host)
+            if m2:
+                service, region = m2.group(1), m2.group(2)
             else:
                 service = "execute-api"
 
-        lines = []
-        lines.append('curl "' + url + '"')
-        lines.append('    --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY"')
-        lines.append('    -H "x-amz-security-token: $AWS_SESSION_TOKEN"')
-        lines.append('    --aws-sigv4 "aws:amz:' + region + ':' + service + '"')
-
-        for header in headers[1:]:
-            lower = header.lower()
-            if lower.startswith("host:") or lower.startswith("authorization:") or lower.startswith("x-amz-date:") or lower.startswith("x-amz-security-token:"):
+        lines = [
+            'curl "{}"'.format(url),
+            '    --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY"',
+            '    -H "x-amz-security-token: $AWS_SESSION_TOKEN"',
+            '    --aws-sigv4 "aws:amz:{}:{}"'.format(region, service)
+        ]
+        for h in headers[1:]:
+            low = h.lower()
+            if low.startswith(("host:", "authorization:", "x-amz-date:", "x-amz-security-token:")):
                 continue
-            lines.append("    -H '" + header + "'")
+            lines.append("    -H '{}'".format(h))
 
-        body_offset = analyzedRequest.getBodyOffset()
-        request_bytes = request
-        if len(request_bytes) > body_offset:
-            body = self._extender._helpers.bytesToString(request_bytes[body_offset:])
-            if body:
-                body = body.replace("'", "'\\''")
-                lines.append("    --data '" + body + "'")
+        body_offset = info.getBodyOffset()
+        req_bytes = req
+        if len(req_bytes) > body_offset:
+            b = self._ext._helpers.bytesToString(req_bytes[body_offset:])
+            if b:
+                lines.append("    --data '{}'".format(b.replace("'", "'\\''")))
 
-        final_lines = []
-        for i, line in enumerate(lines):
-            if i < len(lines) - 1:
-                final_lines.append(line + " \\")
-            else:
-                final_lines.append(line)
-        curlCommand = "\n".join(final_lines)
-        self.copyToClipboard(curlCommand)
-
-    def copyToClipboard(self, text):
+        cmd = "\n".join(l + " \\" for l in lines[:-1]) + "\n" + lines[-1]
         try:
-            selection = StringSelection(text)
-            clipboard = Toolkit.getDefaultToolkit().getSystemClipboard()
-            clipboard.setContents(selection, None)
-            self._log("Curl command copied to clipboard.")
-        except Exception as e:
-            self._log("Error copying to clipboard: " + str(e))
-            parent = getBurpFrame()  # Use our helper function for proper GUI parenting.
-            JOptionPane.showMessageDialog(parent, text, "Curl Command", JOptionPane.INFORMATION_MESSAGE)
-
-    def _log(self, message):
-        try:
-            self._extender._stdout.write(message + "\n")
+            Toolkit.getDefaultToolkit().getSystemClipboard()\
+                   .setContents(StringSelection(cmd), None)
+            self._ext._stdout.write("SigV4 curl command copied\n")
         except Exception:
-            pass
+            parent = getBurpFrame()
+            JOptionPane.showMessageDialog(parent, cmd, "Curl Command", JOptionPane.INFORMATION_MESSAGE)
