@@ -20,7 +20,7 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
 
     def registerExtenderCallbacks(self, callbacks):
         self._callbacks = callbacks
-        self._helpers   = callbacks.getHelpers()
+        self._helpers = callbacks.getHelpers()
         callbacks.setExtensionName("AWS Curl Commands")
         callbacks.registerContextMenuFactory(self)
         self._stdout = callbacks.getStdout()
@@ -49,49 +49,48 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
 
         return menu_items
 
-
 class AwscurlActionListener(ActionListener):
     def __init__(self, extender, msg):
-        self._helpers   = extender._helpers
+        self._helpers = extender._helpers
         self._callbacks = extender._callbacks
-        self._stdout    = extender._stdout
-        self._msg       = msg
+        self._stdout = extender._stdout
+        self._msg = msg
 
     def actionPerformed(self, event):
         try:
-            info    = self._helpers.analyzeRequest(self._msg)
-            method  = info.getMethod()
-            url     = str(info.getUrl())
+            info = self._helpers.analyzeRequest(self._msg)
+            method = info.getMethod()
+            url = str(info.getUrl())
             headers = info.getHeaders()
-            body    = self._helpers.bytesToString(
-                          self._msg.getRequest()[info.getBodyOffset():]
-                      )
+            body = self._helpers.bytesToString(self._msg.getRequest()[info.getBodyOffset():])
 
             svc, region = self._extract_aws_info(headers)
-            ctype       = self._get_content_type(headers)
-            payload     = self._process_body(body, ctype)
+            ctype = self._get_content_type(headers)
+            payload = self._process_body(body, ctype)
 
-            parts = [
-                "awscurl --service {} --region {}".format(svc, region),
-                "-X {}".format(method)
-            ]
+            parts = ["awscurl --service {} --region {}".format(svc, region), "-X {}".format(method)]
             for h in headers[1:]:
                 if not h.lower().startswith("authorization"):
                     parts.append("-H '{}'".format(h))
-
             if payload:
                 esc = payload.replace("'", "'\\''")
                 parts.append("-d '{}'".format(esc))
-
             parts.append("'{}'".format(url))
             cmd = " \\\n".join(parts)
 
-            Toolkit.getDefaultToolkit().getSystemClipboard()\
-                   .setContents(StringSelection(cmd), None)
-            self._callbacks.printOutput("awscurl command copied:\n" + cmd)
+            self._copyToClipboard(cmd, "awscurl command copied:\n" + cmd, "awscurl Command")
 
         except Exception as e:
             self._callbacks.printError("Error generating awscurl: " + str(e))
+
+    def _copyToClipboard(self, cmd, log_msg, dialog_title):
+        try:
+            Toolkit.getDefaultToolkit().getSystemClipboard().setContents(StringSelection(cmd), None)
+            self._callbacks.printOutput(log_msg)
+        except Exception as e:
+            self._callbacks.printError("Clipboard error: " + str(e))
+            parent = getBurpFrame()
+            JOptionPane.showMessageDialog(parent, cmd, dialog_title, JOptionPane.INFORMATION_MESSAGE)
 
     def _extract_aws_info(self, headers):
         for h in headers:
@@ -106,7 +105,7 @@ class AwscurlActionListener(ActionListener):
     def _get_content_type(self, headers):
         for h in headers:
             if h.lower().startswith("content-type:"):
-                return h.split(":",1)[1].strip().lower()
+                return h.split(":", 1)[1].strip().lower()
         return ""
 
     def _process_body(self, body, ctype):
@@ -121,28 +120,28 @@ class AwscurlActionListener(ActionListener):
         except:
             return body.strip()
 
-
 class CurlActionListener(ActionListener):
     def __init__(self, extender, msg):
         self._helpers = extender._helpers
-        self._stdout  = extender._stdout
-        self._msg     = msg
+        self._stdout = extender._stdout
+        self._msg = msg
 
     def actionPerformed(self, event):
         try:
-            svc     = self._msg.getHttpService()
-            req     = self._msg.getRequest()
-            info    = self._helpers.analyzeRequest(svc, req)
+            svc = self._msg.getHttpService()
+            req = self._msg.getRequest()
+            info = self._helpers.analyzeRequest(svc, req)
             headers = info.getHeaders()
-            url     = info.getUrl().toString()
+            url = info.getUrl().toString()
 
-            host    = svc.getHost()
-            region  = "us-east-1"
+            host = svc.getHost()
+            region = "us-east-1"
             service = ""
             if "execute-api" in host:
                 service = "execute-api"
                 m = re.search(r"\.execute-api\.([^.]+)\.amazonaws\.com", host)
-                if m: region = m.group(1)
+                if m:
+                    region = m.group(1)
             else:
                 m2 = re.match(r"^([^-\.]+)(?:-[^\.]+)?\.([^.]+)\.amazonaws\.com$", host)
                 if m2:
@@ -163,17 +162,24 @@ class CurlActionListener(ActionListener):
                 lines.append("    -H '{}'".format(h))
 
             body_offset = info.getBodyOffset()
-            req_bytes   = req
+            req_bytes = req
             if len(req_bytes) > body_offset:
                 b = self._helpers.bytesToString(req_bytes[body_offset:])
                 if b:
                     lines.append("    --data '{}'".format(b.replace("'", "'\\''")))
 
             cmd = "\n".join(l + " \\" for l in lines[:-1]) + "\n" + lines[-1]
-            Toolkit.getDefaultToolkit().getSystemClipboard()\
-                   .setContents(StringSelection(cmd), None)
-            self._stdout.write("SigV4 curl command copied\n")
 
-        except Exception:
+            self._copyToClipboard(cmd, "SigV4 curl command copied", "SigV4 cURL Command")
+
+        except Exception as e:
+            self._stdout.write("Error generating SigV4 curl command: {}\n".format(str(e)))
+
+    def _copyToClipboard(self, cmd, log_msg, dialog_title):
+        try:
+            Toolkit.getDefaultToolkit().getSystemClipboard().setContents(StringSelection(cmd), None)
+            self._stdout.write(log_msg + "\n")
+        except Exception as e:
+            self._stdout.write("Clipboard error: {}\n".format(str(e)))
             parent = getBurpFrame()
-            JOptionPane.showMessageDialog(parent, cmd, "Curl Command", JOptionPane.INFORMATION_MESSAGE)
+            JOptionPane.showMessageDialog(parent, cmd, dialog_title, JOptionPane.INFORMATION_MESSAGE)
