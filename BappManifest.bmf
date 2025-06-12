@@ -1,0 +1,13 @@
+Uuid: 39523fd1244b4593b0dbfc43df8a284f
+ExtensionType: 2
+Name: AWS Curl Burp Extension
+RepoName: awscurl-burp-extension-main
+ScreenVersion: 1.0.0
+SerialVersion: 1
+MinPlatformVersion: 0
+ProOnly: False
+Author: Dotwut
+ShortDescription: This extension allows the creation of AWS Curl commands or cURL with SigV4 from an API, which will be copied to the clipboard upon selection.
+EntryPoint: ./awscurl_curlsigv4.py
+BuildCommand: 
+SupportedProducts: Pro, Community

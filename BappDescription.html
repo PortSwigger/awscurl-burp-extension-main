@@ -1,0 +1,40 @@
+<p>The AWSCurl/Curl With SigV4 BurpExtension is designed to generate AWS Curl commands or cURL with SigV4 from an API. This extension simplifies the generation of these commands through a right-click context menu within Burp Suite. Selecting the extension from this context menu will instantly copy the generated awscurl command or curl with sigv4 command to your clipboard.</p>
+
+<h2>Features</h2>
+
+<p>The primary feature of the AWSCurl/Curl With SigV4 BurpExtension is the automated generation of AWS Curl and cURL with SigV4 commands associated with a specified API. The generated commands conform to the following structures:</p>
+
+<pre>
+<code class=Code>
+    awscurl --service &lt;service&gt; --region us-east-1 \\
+    -X GET \\
+    -H Host: &lt;host&gt; \\
+    -H Accept-Encoding: gzip, deflate, br \\
+    -H User-Agent: &lt;User-Agent&gt; \\
+    -H X-Amz-Date: &lt;date&gt; \\
+    -H X-Amz-Security-Token: &lt;Token&gt; \\
+    -d {&lt;data&gt;} \\
+    &lt;Endpoint-URL&gt;
+</code>
+</pre>
+
+<pre>
+<code class=Code>
+curl https://endpoint \\
+    --user $AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY \\
+    -H x-amz-security-token: $AWS_SESSION_TOKEN \\
+    --aws-sigv4 aws:amz:&lt;region&gt;:&lt;service&gt; \\
+    -H User-Agent: &lt;User-Agent&gt; \\
+    -H Accept: application/json, \\
+    -H Accept-Language: en-US,en;q=0.5 \\
+    -H Accept-Encoding: gzip, deflate, br \\
+    -H Content-Type: application/json \\
+    -H Origin: * \\
+    -H Content-Length: 457 \\
+    --data {&lt;data&gt;}
+</code>
+</pre>
+
+<h2>Usage</h2>
+
+<p>To use this Burp Suite extension, make a right-click within Burp to bring up the extension context menu. Select the AWSCurl/Curl With SigV4 option from the menu. Once selected, the relevant command (either awscurl or curl with sigv4) will be automatically generated and copied to your clipboard, ready for immediate use.</p>
